@@ -1,62 +1,63 @@
-from sqlalchemy.ext.asyncio import AsyncSession
+import logging
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from models import Base, engine, AsyncSessionLocal, User, Schedule
 from passlib.context import CryptContext
-import logging
+import os
 
-logger = logging.getLogger(_name_)
+logger = logging.getLogger(__name__)  # ← fixed: was _name_
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 async def init_db():
-    """Create all tables and seed default users/schedules on first run."""
+    """Create all tables and seed default data."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created.")
-    await seed_defaults()
+    await seed_default_data()
 
 
-async def seed_defaults():
-    """Seed default admin user and tap stand schedules if not present."""
+async def seed_default_data():
+    """Seed default users and schedules if they don't exist."""
     async with AsyncSessionLocal() as db:
-        # Check if admin user exists
         from sqlalchemy import select
-        result = await db.execute(select(User).where(User.username == "admin"))
-        if not result.scalar_one_or_none():
-            admin = User(
-                username="admin",
-                hashed_password=pwd_context.hash("admin123"),  # Change in production!
-                role="admin",
-                email="admin@barangay.local"
-            )
-            operator = User(
-                username="operator",
-                hashed_password=pwd_context.hash("operator123"),
-                role="operator",
-            )
-            official = User(
-                username="official",
-                hashed_password=pwd_context.hash("official123"),
-                role="official",
-            )
-            db.add_all([admin, operator, official])
-            logger.info("Default users seeded.")
 
-        # Seed default schedules for 5 tap stands
-        result = await db.execute(select(Schedule))
-        if not result.scalars().all():
-            labels = ["Sitio A", "Sitio B", "Sitio C", "Sitio D", "Sitio E"]
-            defaults = [
-                Schedule(tap_stand=i+1, label=labels[i],
-                         start_time="05:30", end_time="07:00", enabled=True)
-                for i in range(5)
-            ]
-            db.add_all(defaults)
-            logger.info("Default schedules seeded.")
+        # ── Default users ──────────────────────────────────────────────────────
+        default_users = [
+            {"username": "admin",    "password": "admin123",    "role": "admin"},
+            {"username": "operator", "password": "operator123", "role": "operator"},
+            {"username": "official", "password": "official123", "role": "official"},
+        ]
+
+        for u in default_users:
+            result = await db.execute(select(User).where(User.username == u["username"]))
+            if not result.scalar_one_or_none():
+                user = User(
+                    username=u["username"],
+                    hashed_password=pwd_context.hash(u["password"]),
+                    role=u["role"],
+                )
+                db.add(user)
+
+        # ── Default schedules ──────────────────────────────────────────────────
+        default_schedules = [
+            {"tap_stand": 1, "label": "Tap Stand 1", "start_time": "06:00", "end_time": "08:00"},
+            {"tap_stand": 2, "label": "Tap Stand 2", "start_time": "06:00", "end_time": "08:00"},
+            {"tap_stand": 3, "label": "Tap Stand 3", "start_time": "06:00", "end_time": "08:00"},
+            {"tap_stand": 4, "label": "Tap Stand 4", "start_time": "06:00", "end_time": "08:00"},
+            {"tap_stand": 5, "label": "Tap Stand 5", "start_time": "06:00", "end_time": "08:00"},
+        ]
+
+        for s in default_schedules:
+            result = await db.execute(select(Schedule).where(Schedule.tap_stand == s["tap_stand"]))
+            if not result.scalar_one_or_none():
+                sched = Schedule(**s)
+                db.add(sched)
 
         await db.commit()
 
 
 async def get_db():
-    """FastAPI dependency for DB session."""
+    """Dependency for FastAPI routes."""
     async with AsyncSessionLocal() as session:
         yield session

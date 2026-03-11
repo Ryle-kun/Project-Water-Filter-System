@@ -58,7 +58,7 @@ def dt_str(dt):
 
 
 class SensorReading(Base):
-    _tablename_ = "sensor_readings"
+    __tablename__ = "sensor_readings"
 
     id             = Column(Integer, primary_key=True, index=True)
     timestamp      = Column(DateTime, default=datetime.utcnow, index=True)
@@ -131,7 +131,7 @@ class SensorReading(Base):
 
 
 class ValveCommand(Base):
-    _tablename_ = "valve_commands"
+    __tablename__ = "valve_commands"
 
     id               = Column(Integer, primary_key=True, index=True)
     timestamp        = Column(DateTime, default=datetime.utcnow, index=True)
@@ -157,7 +157,7 @@ class ValveCommand(Base):
 
 
 class Alert(Base):
-    _tablename_ = "alerts"
+    __tablename__ = "alerts"
 
     id              = Column(Integer, primary_key=True, index=True)
     timestamp       = Column(DateTime, default=datetime.utcnow, index=True)
@@ -186,7 +186,7 @@ class Alert(Base):
 
 
 class Schedule(Base):
-    _tablename_ = "schedules"
+    __tablename__ = "schedules"
 
     id         = Column(Integer, primary_key=True, index=True)
     tap_stand  = Column(Integer, nullable=False)
@@ -209,7 +209,7 @@ class Schedule(Base):
 
 
 class User(Base):
-    _tablename_ = "users"
+    __tablename__ = "users"
 
     id              = Column(Integer, primary_key=True, index=True)
     username        = Column(String, unique=True, index=True, nullable=False)
