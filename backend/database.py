@@ -2,12 +2,12 @@ import logging
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from models import Base, engine, AsyncSessionLocal, User, Schedule
 from passlib.context import CryptContext
+from sqlalchemy import select # Idinagdag ito sa taas
 import os
 
-logger = logging.getLogger(__name__)  # ← fixed: was _name_
+logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 async def init_db():
     """Create all tables and seed default data."""
@@ -16,22 +16,23 @@ async def init_db():
     logger.info("Database tables created.")
     await seed_default_data()
 
-
 async def seed_default_data():
     """Seed default users and schedules if they don't exist."""
     async with AsyncSessionLocal() as db:
-        from sqlalchemy import select
-
         # ── Default users ──────────────────────────────────────────────────────
+        # Note: Ginawa nating 'password123' para madali tandaan
         default_users = [
-            {"username": "admin",    "password": "admin123",    "role": "admin"},
-            {"username": "operator", "password": "operator123", "role": "operator"},
-            {"username": "official", "password": "official123", "role": "official"},
+            {"username": "admin",    "password": "password123", "role": "admin"},
+            {"username": "operator", "password": "password123", "role": "operator"},
+            {"username": "official", "password": "password123", "role": "official"},
         ]
 
         for u in default_users:
             result = await db.execute(select(User).where(User.username == u["username"]))
-            if not result.scalar_one_or_none():
+            # FIX: .scalars().first() ang gamit para iwas MultipleResultsFound error
+            user_exists = result.scalars().first() 
+            
+            if not user_exists:
                 user = User(
                     username=u["username"],
                     hashed_password=pwd_context.hash(u["password"]),
@@ -50,12 +51,14 @@ async def seed_default_data():
 
         for s in default_schedules:
             result = await db.execute(select(Schedule).where(Schedule.tap_stand == s["tap_stand"]))
-            if not result.scalar_one_or_none():
+            # FIX: .scalars().first() rin dito
+            sched_exists = result.scalars().first()
+            
+            if not sched_exists:
                 sched = Schedule(**s)
                 db.add(sched)
 
         await db.commit()
-
 
 async def get_db():
     """Dependency for FastAPI routes."""

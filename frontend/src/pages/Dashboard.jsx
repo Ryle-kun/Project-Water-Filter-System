@@ -1,319 +1,373 @@
-import { useState, useEffect } from "react";
-import { useApi } from "../hooks/useApi";
-import { useWebSocket } from "../hooks/useWebSocket";
-import TankCard      from "../components/TankCard";
-import ValveButton   from "../components/ValveButton";
-import AlertBadge    from "../components/AlertBadge";
-import ScheduleRow   from "../components/ScheduleRow";
-import MiniChart     from "../components/MiniChart";
+import React, { useState, useEffect } from "react";
 import styles from "../styles";
-
-const fmt = (n, d = 1) => (n ?? 0).toFixed(d);
-
-const TIER_COLORS = {
-  NORMAL:   "#22c55e",
-  MODERATE: "#facc15",
-  LOW:      "#f97316",
-  CRITICAL: "#ef4444",
-};
+import { API, WS_URL } from "../constants";
+import WebTankCard from "../components/WebTankCard";
+import WebValveButton from "../components/WebValveButton";
+import WebAlertBadge from "../components/WebAlertBadge";
+import WebMiniChart from "../components/WebMiniChart";
+import WebScheduleRow from "../components/WebScheduleRow";
 
 export default function Dashboard({ user, onLogout }) {
-  const api = useApi();
+  const [activeTab, setActiveTab] = useState('overview');
+  const [status, setStatus] = useState(null);
+  const [schedules, setSchedules] = useState([]);
+  const [history, setHistory] = useState([]);
+  
+  // ── 📈 ADD THIS: State for Graph Data ──
+  const [chartData, setChartData] = useState(null);
 
-  const [connected,  setConnected]  = useState(false);
-  const [status,     setStatus]     = useState(null);
-  const [alerts,     setAlerts]     = useState([]);
-  const [schedules,  setSchedules]  = useState([]);
-  const [history,    setHistory]    = useState([]);
-  const [tab,        setTab]        = useState("overview");
-  const [loading,    setLoading]    = useState(true);
-  const [lastUpdate, setLastUpdate] = useState(null);
+  // ── 📅 SCHEDULE STATES ──
+  const [showModal, setShowModal] = useState(false);
+  const [editingId, setEditingId] = useState(null); 
+  const [formData, setFormData] = useState({ label: "", start_time: "08:00", end_time: "12:00" });
 
-  // ── Load initial data on mount ───────────────────────────────────────────────
-  useEffect(() => {
-    api("/api/dashboard")
-      .then(data => {
-        setStatus(data.status);
-        setAlerts(data.active_alerts || []);
-        setSchedules(data.schedules  || []);
-        setLoading(false);
-      })
-      .catch(err => { console.error(err); setLoading(false); });
-
-    api("/api/sensors/history?hours=6")
-      .then(h => setHistory(h))
-      .catch(console.error);
-  }, []);
-
-  // ── WebSocket live updates ───────────────────────────────────────────────────
-  useWebSocket({
-    onConnect:    () => setConnected(true),
-    onDisconnect: () => setConnected(false),
-    onMessage: (msg) => {
-      if (msg.type === "sensor_update" || msg.type === "init") {
-        setStatus(msg.data);
-        setLastUpdate(new Date());
-        setHistory(h => [...h.slice(-200), msg.data]);
-      }
-      if (msg.type === "alert_new") {
-        setAlerts(a => [msg.data, ...a.slice(0, 19)]);
-      }
-      if (msg.type === "alert_acknowledged") {
-        setAlerts(a => a.filter(x => x.id !== msg.alert_id));
-      }
-      if (msg.type === "valve_update") {
-        setStatus(s => s ? {
-          ...s,
-          valves: { ...s.valves, [`sv${msg.data.valve_id}`]: msg.data.action === "OPEN" }
-        } : s);
-      }
-      if (msg.type === "schedule_update") {
-        setSchedules(sch => sch.map(s => s.tap_stand === msg.data.tap_stand ? msg.data : s));
-      }
-    },
-  });
-
-  // ── Actions ──────────────────────────────────────────────────────────────────
-  async function toggleValve(id, open) {
+  const fetchData = async () => {
     try {
-      await api("/api/valves/command", {
-        method: "POST",
-        body: JSON.stringify({ valve_id: id, action: open ? "OPEN" : "CLOSE", duration_minutes: 30 }),
-      });
-    } catch (e) { console.error(e); }
-  }
+      const token = localStorage.getItem('token');
+      
+      // ── 💡 UPDATED FETCH: Sabay nating kunin ang Dashboard at History ──
+      const [dashRes, historyRes] = await Promise.all([
+        fetch(`${API}/api/dashboard`, { headers: { 'Authorization': `Bearer ${token}` } }),
+        fetch(`${API}/api/stats/history`, { headers: { 'Authorization': `Bearer ${token}` } })
+      ]);
 
-  async function ackAlert(id) {
+      const data = await dashRes.json();
+      const historyData = await historyRes.json();
+
+      setStatus(data.status);
+      setSchedules(data.schedules || []);
+      
+      // 📈 I-save ang data para sa Graph
+      setChartData(historyData);
+
+      setHistory((data.active_alerts || []).map(a => ({
+        id: a.id, event: a.message, time: new Date(a.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), type: a.severity === 'CRITICAL' ? 'warning' : 'info'
+      })));
+    } catch (e) { console.error("Fetch Error:", e); }
+  };
+
+useEffect(() => {
+  fetchData();
+  const ws = new WebSocket(`${WS_URL}/web_pro_${Math.random()}`);
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    // 💡 SENSOR UPDATE: I-update lang ang data, huwag mag-fetch ng buong DB.
+    if (msg.type === 'sensor_update') {
+      setStatus(prev => ({
+        ...prev,
+        ...msg.data,
+        valves: { ...prev?.valves, ...msg.data.valves }
+      }));
+    }
+
+    // 🚨 IMPORTANT: Tawagin lang ang fetchData() sa mabibigat na updates.
+    if (msg.type === 'alert_new' || msg.type === 'schedule_update') {
+      fetchData();
+    }
+  };
+
+  return () => ws.close();
+}, []);
+
+  // ... (handleValveToggle, handleClearHistory, openModal, handleSaveSchedule, handleDeleteSchedule stay the same) ...
+
+  const handleValveToggle = async (id) => {
+  const valveKey = `sv${id}`;
+  const isCurrentlyOpen = status.valves[valveKey];
+  const action = isCurrentlyOpen ? "CLOSE" : "OPEN";
+
+  // 🚨 1. OPTIMISTIC UPDATE (Ito ang pamatay-delay!)
+  // Babaguhin natin ang status sa SCREEN agad-agad (< 50ms).
+  setStatus(prev => ({
+    ...prev,
+    valves: {
+      ...prev.valves,
+      [valveKey]: !isCurrentlyOpen // Baligtarin agad ang switch sa UI
+    }
+  }));
+
+  try {
+    // 📡 2. API CALL (Background Task)
+    // Habang "On" na ang button sa screen, tsaka pa lang kakausapin ang Python.
+    const res = await fetch(`${API}/api/valves/command`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json', 
+        'Authorization': `Bearer ${localStorage.getItem('token')}` 
+      },
+      body: JSON.stringify({ valve_id: id, action })
+    });
+
+    if (!res.ok) throw new Error("Server rejected command");
+
+    // ✅ HUWAG nang tawagin ang fetchData() dito. 
+    // Kasi updated na ang UI natin sa Step 1.
+    console.log(`✅ Valve ${id} set to ${action}`);
+
+  } catch (e) {
+    // ❌ 3. ROLLBACK (Kapag nag-error ang server)
+    // Kapag pumalya ang request, tsaka lang natin ibabalik sa dati ang button.
+    alert("Connection Error: Reverting valve state.");
+    fetchData(); 
+  }
+};
+
+  const handleClearHistory = async () => {
+    if (!window.confirm("Are you sure you want to delete all logs?")) return;
     try {
-      await api(`/api/alerts/${id}/acknowledge`, {
-        method: "POST",
-        body: JSON.stringify({ note: "" }),
+      await fetch(`${API}/api/alerts/clear`, {
+        method: 'DELETE', headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
       });
-      setAlerts(a => a.filter(x => x.id !== id));
-    } catch (e) { console.error(e); }
-  }
+      setHistory([]);
+    } catch (e) { alert("Error clearing logs."); }
+  };
 
-  async function saveSchedule(tapStand, form) {
+  const openModal = (sched = null) => {
+    if (sched) {
+      setEditingId(sched.id);
+      setFormData({ 
+        label: sched.label, 
+        start_time: sched.start_time.substring(0, 5), 
+        end_time: sched.end_time.substring(0, 5) 
+      });
+    } else {
+      setEditingId(null);
+      setFormData({ label: "", start_time: "08:00", end_time: "12:00" });
+    }
+    setShowModal(true);
+  };
+
+const handleClearValveHistory = async () => {
+  // 🚨 Confirmation muna para hindi aksidenteng mabura ang demo data
+  if (!window.confirm("Database Maintenance: Wipe all Valve Command logs?")) return;
+
+  try {
+    const token = localStorage.getItem('token');
+    const res = await fetch(`${API}/api/valves/clear-history`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (res.ok) {
+      alert("✅ Valve history successfully wiped from MySQL.");
+      fetchData(); // I-refresh ang data sa screen
+    } else {
+      const err = await res.json();
+      alert("❌ Error: " + err.detail);
+    }
+  } catch (e) {
+    console.error("Delete Error:", e);
+    alert("❌ Connection Error: Hindi ma-reach ang server.");
+  }
+};
+  const handleSaveSchedule = async () => {
+    if (!formData.label) return alert("Add TapStand Name.");
+    const token = localStorage.getItem('token');
+    const method = editingId ? 'PUT' : 'POST';
+    const endpoint = editingId ? `${API}/api/schedules/${editingId}` : `${API}/api/schedules`;
     try {
-      const updated = await api("/api/schedules", {
-        method: "POST",
-        body: JSON.stringify({ tap_stand: tapStand, ...form }),
+      const res = await fetch(endpoint, {
+        method: method,
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          tap_stand: editingId ? (schedules.find(s => s.id === editingId)?.tap_stand || 1) : 1,
+          label: formData.label,
+          start_time: formData.start_time,
+          end_time: formData.end_time,
+          enabled: true
+        })
       });
-      setSchedules(sch => sch.map(s => s.tap_stand === tapStand ? updated : s));
-    } catch (e) { console.error(e); }
-  }
+      if (res.ok) {
+        setShowModal(false);
+        fetchData();
+      } else {
+        const err = await res.json();
+        alert("Error: " + JSON.stringify(err.detail));
+      }
+    } catch (e) { alert("Error saving schedule."); }
+  };
 
-  const isOperator = ["operator", "admin"].includes(user?.role);
-  const tc = TIER_COLORS[status?.tier] || "#64748b";
+  const handleDeleteSchedule = async (id) => {
+    if (!window.confirm("Are you sure you want to remove this schedule?")) return;
+    try {
+      const token = localStorage.getItem('token');
+      await fetch(`${API}/api/schedules/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      fetchData();
+    } catch (e) { alert("Error deleting schedule."); }
+  };
+
+  if (!status) return <div style={styles.loginWrap}><h2 style={{color:'#3b82f6'}}>Syncing Barangay Water IoT...</h2></div>;
 
   return (
-    <div style={styles.dashWrap}>
-
-      {/* ── Header ── */}
-      <header style={styles.header}>
-        <div style={styles.headerLeft}>
-          <span style={styles.headerIcon}>💧</span>
-          <div>
-            <div style={styles.headerTitle}>Barangay Water System</div>
-            <div style={styles.headerSub}>3-Tank Gravity-Fed Filtration · IoT Monitor</div>
+    <div style={styles.mainContainer}>
+      {/* 🎡 MODAL (UNTOUCHED) */}
+      {showModal && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalContent}>
+            <div style={styles.modalHeader}><h3 style={{ margin: 0, fontSize: '18px' }}>{editingId ? 'Update Distribution' : 'New Distribution'}</h3></div>
+            <div style={styles.modalBody}>
+                <span style={styles.timeLabel}>TAP STAND DESIGNATION</span>
+                <input style={styles.modalInput} placeholder="TapStand Name" value={formData.label} onChange={e => setFormData({...formData, label: e.target.value})} />
+                <span style={styles.timeLabel}>SUPPLY SCHEDULE</span>
+                <div style={styles.timePickerRow}>
+                  <div style={styles.timeBox}>
+                    <span style={{ fontSize: '9px', color: '#475569', marginBottom: '5px', display: 'block' }}>START</span>
+                    <input type="time" style={styles.timeInput} value={formData.start_time} onChange={e => setFormData({...formData, start_time: e.target.value})} />
+                  </div>
+                  <div style={styles.timeBox}>
+                    <span style={{ fontSize: '9px', color: '#475569', marginBottom: '5px', display: 'block' }}>END</span>
+                    <input type="time" style={styles.timeInput} value={formData.end_time} onChange={e => setFormData({...formData, end_time: e.target.value})} />
+                  </div>
+                </div>
+            </div>
+            <div style={styles.modalActions}>
+              <button style={styles.btnCancel} onClick={() => setShowModal(false)}>CANCEL</button>
+              <button style={styles.btnSave} onClick={handleSaveSchedule}>{editingId ? 'SAVE CHANGES' : 'CREATE'}</button>
+            </div>
           </div>
-        </div>
-        <div style={styles.headerRight}>
-          <div style={{
-            ...styles.connBadge,
-            background:  connected ? "rgba(34,197,94,0.15)" : "rgba(239,68,68,0.15)",
-            color:       connected ? "#22c55e" : "#ef4444",
-            borderColor: connected ? "#22c55e" : "#ef4444",
-          }}>
-            {connected ? "● Live" : "○ Reconnecting…"}
-          </div>
-          {lastUpdate && (
-            <span style={styles.lastUpdate}>Updated {lastUpdate.toLocaleTimeString()}</span>
-          )}
-          <span style={styles.userBadge}>{user?.username} ({user?.role})</span>
-          <button style={styles.logoutBtn} onClick={onLogout}>Logout</button>
-        </div>
-      </header>
-
-      {/* ── Critical Alert Banner ── */}
-      {alerts.some(a => a.severity === "CRITICAL") && (
-        <div style={styles.criticalBanner}>
-          🚨 CRITICAL: {alerts.find(a => a.severity === "CRITICAL")?.message}
         </div>
       )}
 
-      {/* ── Navigation Tabs ── */}
-      <nav style={styles.nav}>
-        {["overview", "valves", "schedules", "alerts", "history"].map(t => (
-          <button
-            key={t}
-            style={{ ...styles.navBtn, ...(tab === t ? styles.navBtnActive : {}) }}
-            onClick={() => setTab(t)}
-          >
-            {{
-              overview:  "📊 Overview",
-              valves:    "🔧 Valves",
-              schedules: "🕒 Schedules",
-              alerts:    `⚠ Alerts${alerts.length > 0 ? ` (${alerts.length})` : ""}`,
-              history:   "📈 History",
-            }[t]}
-          </button>
+      <header style={styles.header}>
+        <div><p style={styles.adminTag}>ADMIN PANEL • LIVE</p><h1 style={styles.title}>Water Monitoring</h1></div>
+        <button onClick={onLogout} style={styles.logoutBtn}>LOGOUT</button>
+      </header>
+
+      <nav style={styles.tabBar}>
+        {['overview', 'valves', 'schedules', 'history'].map(t => (
+          <button key={t} onClick={() => setActiveTab(t)} style={{ ...styles.tab, ...(activeTab === t ? styles.tabActive : {}) }}>{t.toUpperCase()}</button>
         ))}
       </nav>
 
-      <main style={styles.main}>
-        {loading ? (
-          <div style={styles.loading}>Loading system data…</div>
-        ) : (
-          <>
-            {/* ── OVERVIEW ── */}
-            {tab === "overview" && (
+      <main style={styles.content}>
+        {activeTab === 'overview' && (
+          <div style={styles.dashboardGrid}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              {/* 🚨 ALERT LOGIC (Mirror of Mobile) */}
+              {(() => {
+                const t1 = status?.tank1?.pct || 0;
+                const t2 = status?.tank2?.pct || 0;
+                const t3 = status?.tank3?.pct || 0;
+                const lowTank = t1 < 20 ? { name: "Tank 1", pct: t1 } : t2 < 20 ? { name: "Tank 2", pct: t2 } : t3 < 20 ? { name: "Tank 3", pct: t3 } : null;
+                if (lowTank) return <WebAlertBadge message={`CRITICAL: ${lowTank.name} is very low (${lowTank.pct}%)`} type="warning" />;
+                return <WebAlertBadge message="System Nominal: All water tanks are stable" type="info" />;
+              })()}
+              
               <div>
-                {status?.tier && (
-                  <div style={{ ...styles.tierBadge, borderColor: tc, color: tc, background: `${tc}18` }}>
-                    Distribution Tier: <strong>{status.tier}</strong> — Max {status.tier_max_taps} tap{status.tier_max_taps !== 1 ? "s" : ""} active
-                  </div>
-                )}
-
+                <p style={styles.sectionHead}>Tank Analysis</p>
                 <div style={styles.tankRow}>
-                  <TankCard name="Tank 1" label="Raw Water"
-                    level={status?.tank1?.level ?? 0} capacity={2000}
-                    color="linear-gradient(180deg,#3b82f6,#1d4ed8)"
-                    subLabel={`Inflow: ${fmt(status?.inflow_rate)} L/min`} />
-                  <div style={styles.arrowWrap}>
-                    <div style={styles.arrowLine} />
-                    <div style={styles.arrowLabel}>SV0 {status?.valves?.sv0 ? "🟢" : "🔴"}</div>
-                    <div style={styles.arrowLine} />
+                  <WebTankCard name="Tank 1" level={status.tank1?.level} capacity={2000} color="#3b82f6" />
+                  <WebTankCard name="Tank 2" level={status.tank2?.level} capacity={2000} color="#8b5cf6" />
+                  <WebTankCard name="Tank 3" level={status.tank3?.level} capacity={4000} color="#0ea5e9" />
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+              <div style={styles.card}>
+                <p style={styles.sectionHead}>Quick Status</p>
+                <div style={{ display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
+                  <div style={{ textAlign: 'center' }}>
+                    <p style={{ fontSize: '10px', color: '#64748b', margin: '0 0 5px' }}>INFLOW</p>
+                    <h2 style={{ margin: 0, fontSize: '24px' }}>{status.inflow_rate} <small style={{fontSize:'12px'}}>L/m</small></h2>
                   </div>
-                  <TankCard name="Tank 2" label="Filtration"
-                    level={status?.tank2?.level ?? 0} capacity={2000}
-                    color="linear-gradient(180deg,#8b5cf6,#6d28d9)"
-                    subLabel={`Filter: ${fmt(status?.filter_rate)} L/min`} />
-                  <div style={styles.arrowWrap}>
-                    <div style={styles.arrowLine} />
-                    <div style={styles.arrowLabel}>0.7 L/min</div>
-                    <div style={styles.arrowLine} />
+                  <div style={{ width: '1px', height: '40px', background: '#1e3a5f' }} />
+                  <div style={{ textAlign: 'center' }}>
+                    <p style={{ fontSize: '10px', color: '#64748b', margin: '0 0 5px' }}>FILTER</p>
+                    <h2 style={{ margin: 0, fontSize: '24px', color: '#7dd3fc' }}>{status.filter_rate} <small style={{fontSize:'12px'}}>L/m</small></h2>
                   </div>
-                  <TankCard name="Tank 3" label="Clean Water"
-                    level={status?.tank3?.level ?? 0} capacity={4000}
-                    color="linear-gradient(180deg,#0ea5e9,#0284c7)"
-                    subLabel="Distribution reservoir" />
-                </div>
-
-                <div style={styles.statsRow}>
-                  {[
-                    { label: "Battery",       value: status?.battery_voltage ? `${fmt(status.battery_voltage)}V` : "—", icon: "🔋", ok: (status?.battery_voltage ?? 13) > 11.5 },
-                    { label: "Solar",         value: status?.solar_charging ? "Charging" : "No charge",                icon: "☀️", ok: status?.solar_charging },
-                    { label: "Active Alerts", value: alerts.length,                                                     icon: "⚠",  ok: alerts.length === 0 },
-                    { label: "Open Taps",     value: `${[1,2,3,4,5].filter(i => status?.valves?.[`sv${i}`]).length} / 5`, icon: "🚰", ok: true },
-                  ].map(s => (
-                    <div key={s.label} style={styles.statCard}>
-                      <span style={styles.statIcon}>{s.icon}</span>
-                      <div style={{ ...styles.statValue, color: s.ok ? "#22c55e" : "#ef4444" }}>{s.value}</div>
-                      <div style={styles.statLabel}>{s.label}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div style={styles.sectionHead}>Tap Stand Status</div>
-                <div style={styles.tapRow}>
-                  {[1, 2, 3, 4, 5].map(i => {
-                    const sched = schedules.find(s => s.tap_stand === i);
-                    const open  = status?.valves?.[`sv${i}`];
-                    return (
-                      <div key={i} style={{ ...styles.tapCard, borderColor: open ? "#22c55e" : "#334155" }}>
-                        <div style={styles.tapIcon}>🚰</div>
-                        <div style={styles.tapName}>{sched?.label || `TS-${i}`}</div>
-                        <div style={{ ...styles.tapStatus, color: open ? "#22c55e" : "#ef4444" }}>
-                          {open ? "OPEN" : "CLOSED"}
-                        </div>
-                        <div style={styles.tapSched}>{sched?.start_time}–{sched?.end_time}</div>
-                      </div>
-                    );
-                  })}
                 </div>
               </div>
-            )}
 
-            {/* ── VALVES ── */}
-            {tab === "valves" && (
-              <div>
-                <div style={styles.sectionHead}>
-                  Manual Valve Control
-                  {!isOperator && <span style={styles.readOnly}> (View only — operator role required)</span>}
-                </div>
-                <div style={styles.valveGrid}>
-                  {[
-                    { id: 0, label: "SV0 — Tank 1 → Tank 2 (Overflow Prevention)", isOpen: status?.valves?.sv0 },
-                    ...[1, 2, 3, 4, 5].map(i => ({
-                      id: i,
-                      label: `SV${i} — Tap Stand ${i} (${schedules.find(s => s.tap_stand === i)?.label || "—"})`,
-                      isOpen: status?.valves?.[`sv${i}`],
-                    }))
-                  ].map(v => (
-                    <ValveButton key={v.id} {...v} onToggle={toggleValve} disabled={!isOperator} />
-                  ))}
-                </div>
-                <div style={styles.valveNote}>Manual overrides expire after 30 minutes.</div>
-              </div>
-            )}
-
-            {/* ── SCHEDULES ── */}
-            {tab === "schedules" && (
-              <div>
-                <div style={styles.sectionHead}>Daily Distribution Schedules</div>
-                <p style={styles.schedNote}>Each tap stand opens within its window, subject to Tank 3 tier limits.</p>
-                <div style={styles.schedList}>
-                  {schedules.map(s => (
-                    <ScheduleRow key={s.id} sched={s} onSave={isOperator ? saveSchedule : () => {}} />
-                  ))}
+              {/* ── 📈 FIX DITO: Pass the chartData state ── */}
+              <div style={styles.card}>
+                <p style={styles.sectionHead}>Trend Analytics</p>
+                <div style={{ height: '300px' }}>
+                   <WebMiniChart history={chartData} /> 
                 </div>
               </div>
-            )}
-
-            {/* ── ALERTS ── */}
-            {tab === "alerts" && (
-              <div>
-                <div style={styles.sectionHead}>Active Alerts ({alerts.length})</div>
-                {alerts.length === 0 ? (
-                  <div style={styles.noAlerts}>✅ No active alerts — system operating normally.</div>
-                ) : (
-                  <div style={styles.alertList}>
-                    {alerts.map(a => (
-                      <AlertBadge key={a.id} alert={a} onAck={isOperator ? ackAlert : () => {}} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* ── HISTORY ── */}
-            {tab === "history" && (
-              <div>
-                <div style={styles.sectionHead}>Tank 3 Level — Last 6 Hours</div>
-                <MiniChart data={history} color="#0ea5e9" label="Tank 3 Clean Water Level (%)" />
-                <div style={styles.historyTable}>
-                  <div style={styles.histHeader}>
-                    {["Time", "T1 %", "T2 %", "T3 %", "Inflow", "Filter", "Open Taps"].map(h => (
-                      <div key={h} style={styles.histCell}>{h}</div>
-                    ))}
-                  </div>
-                  {[...history].reverse().slice(0, 30).map((r, i) => (
-                    <div key={i} style={{ ...styles.histRow, background: i % 2 === 0 ? "#0d1f3c" : "transparent" }}>
-                      <div style={styles.histCell}>{r.timestamp ? new Date(r.timestamp).toLocaleTimeString() : "—"}</div>
-                      <div style={styles.histCell}>{r.tank1?.pct ?? "—"}%</div>
-                      <div style={styles.histCell}>{r.tank2?.pct ?? "—"}%</div>
-                      <div style={styles.histCell}>{r.tank3?.pct ?? "—"}%</div>
-                      <div style={styles.histCell}>{fmt(r.inflow_rate)} L/m</div>
-                      <div style={styles.histCell}>{fmt(r.filter_rate)} L/m</div>
-                      <div style={styles.histCell}>{r.valves ? [1,2,3,4,5].filter(n => r.valves[`sv${n}`]).length : "—"}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
+            </div>
+          </div>
         )}
+
+        {/* ... (valves, schedules, history tabs untouched) ... */}
+        {activeTab === 'valves' && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
+  {[1, 2, 3, 4, 5].map(id => (
+    <WebValveButton 
+      key={id} 
+      // 💡 DITO ANG PAGBABAGO: Tinanggal ang extra '1'
+      label={`Tap Stand 0${id}`} // Lalabas na: Tap Stand 01, Tap Stand 02...
+      isOpen={status.valves?.[`sv${id}`]} 
+      onToggle={() => handleValveToggle(id)} 
+    />
+  ))}
+</div>
+        )}
+
+        {activeTab === 'schedules' && (
+          <div>
+            <div style={styles.schedHeaderRow}>
+              <p style={styles.sectionHead}>Distribution Logs</p>
+              <button style={styles.plusBtn} onClick={() => openModal()}>+ SET</button>
+            </div>
+            {schedules.map(s => (
+              <WebScheduleRow key={s.id} sched={s} onEdit={() => openModal(s)} onDelete={() => handleDeleteSchedule(s.id)} />
+            ))}
+          </div>
+        )}
+
+      {activeTab === 'history' && (
+  <div>
+    <div style={styles.schedHeaderRow}>
+      <p style={styles.sectionHead}>System Activity Log</p>
+      
+      {/* ── 🚨 BUTTON CONTAINER ── */}
+      <div style={{ display: 'flex', gap: '10px' }}>
+        {/* Button para sa Alerts (Red) */}
+        <button 
+          style={styles.clearBtn} 
+          onClick={handleClearHistory}
+        >
+          CLEAR ALERT LOGS
+        </button>
+
+        {/* 💡 BAGONG BUTTON: Orange Background + White Font */}
+        <button 
+          style={{ 
+            ...styles.clearBtn, 
+            backgroundColor: '#f59e0b', 
+            color: '#ffffff',       // 👈 ITO ANG NAGPAPAPUTI NG FONT
+            border: 'none',
+            cursor: 'pointer',
+            fontWeight: 'bold'      // Para mas malinaw tignan
+          }} 
+          onClick={handleClearValveHistory}
+        >
+          WIPE VALVE LOGS
+        </button>
+      </div>
+    </div>
+
+    {/* LISTAHAN NG LOGS */}
+    {history.length > 0 ? history.map(log => (
+      <div key={log.id} style={{ ...styles.card, display: 'flex', alignItems: 'center', marginBottom: '12px', padding: '20px' }}>
+        <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: log.type === 'warning' ? '#ef4444' : '#3b82f6', marginRight: '20px' }} />
+        <div style={{ flex: 1, textAlign: 'left' }}>
+          <p style={{ margin: 0, fontSize: '14px', fontWeight: 'bold' }}>{log.event}</p>
+          <p style={{ margin: 0, fontSize: '11px', color: '#64748b', marginTop: '4px' }}>{log.time}</p>
+        </div>
+      </div>
+    )) : (
+      <p style={{textAlign:'center', color:'#64748b', marginTop:'100px'}}>No logs found.</p>
+    )}
+  </div>
+)}
       </main>
     </div>
   );

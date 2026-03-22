@@ -1,10 +1,11 @@
+// src/pages/LoginPage.jsx
 import { useState } from "react";
 import { API } from "../constants";
 import styles from "../styles";
 
 export default function LoginPage({ onLogin }) {
-  const [form, setForm]       = useState({ username: "", password: "" });
-  const [error, setError]     = useState("");
+  const [form, setForm] = useState({ username: "", password: "" });
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e) {
@@ -19,46 +20,58 @@ export default function LoginPage({ onLogin }) {
       });
       if (!res.ok) throw new Error("Invalid credentials");
       const data = await res.json();
-      localStorage.setItem("token",    data.access_token);
-      localStorage.setItem("role",     data.role);
+      
+      // I-save ang mahahalagang data
+      localStorage.setItem("token", data.access_token);
       localStorage.setItem("username", data.username);
+      localStorage.setItem("role", data.role);
+      
       onLogin(data);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
+    } catch (err) { 
+      setError("Login Failed. Check connection or credentials."); 
+    } finally { 
+      setLoading(false); 
     }
   }
 
   return (
     <div style={styles.loginWrap}>
       <div style={styles.loginCard}>
+        {/* WATER DROP LOGO */}
         <div style={styles.loginLogo}>💧</div>
-        <h1 style={styles.loginTitle}>Barangay Water System</h1>
-        <p style={styles.loginSub}>Monitoring & Control Dashboard</p>
+        
+        <h1 style={styles.loginTitle}>Water Monitoring</h1>
+        <p style={styles.loginSub}>PROJECT: WATER FILTER SYSTEM</p>
 
-        <form onSubmit={handleSubmit} style={styles.loginForm}>
-          <input
-            style={styles.input}
-            placeholder="Username"
-            value={form.username}
-            onChange={e => setForm(f => ({ ...f, username: e.target.value }))}
-            autoFocus
-          />
-          <input
-            style={styles.input}
-            type="password"
-            placeholder="Password"
-            value={form.password}
-            onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-          />
-          {error && <div style={styles.errorMsg}>{error}</div>}
-          <button style={styles.loginBtn} disabled={loading}>
-            {loading ? "Signing in…" : "Sign In"}
+        <form onSubmit={handleSubmit} style={{ width: '100%' }}>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>USERNAME</label>
+            <input 
+              style={styles.input} 
+              placeholder="Enter username" 
+              required
+              onChange={e => setForm({...form, username: e.target.value})} 
+            />
+          </div>
+
+          <div style={styles.formGroup}>
+            <label style={styles.label}>PASSWORD</label>
+            <input 
+              style={styles.input} 
+              type="password" 
+              placeholder="••••••••" 
+              required
+              onChange={e => setForm({...form, password: e.target.value})} 
+            />
+          </div>
+
+          <button style={styles.loginBtn} disabled={loading} type="submit">
+            {loading ? "VERIFYING..." : "SIGN IN"}
           </button>
+          
+          {error && <p style={{ color: '#ef4444', fontSize: '12px', marginTop: '15px' }}>{error}</p>}
         </form>
 
-        <p style={styles.loginHint}>Default: admin / admin123</p>
       </div>
     </div>
   );
